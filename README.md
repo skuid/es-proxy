@@ -23,6 +23,10 @@ Usage of es-proxy:
         The target url to proxy to. (default "os.Getenv(\"ES_DOMAIN\")")
 ```
 
+## Contributing
+
+All code in the `/vendor` director is managed by [`govendor`](https://github.com/kardianos/govendor)
+
 ## Wishlist
 
 - [ ] Add tests/CI
