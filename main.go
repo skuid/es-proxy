@@ -8,13 +8,13 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"os"
-	"strings"
 	"time"
 
 	log "github.com/Sirupsen/logrus"
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/client/metadata"
 	"github.com/aws/aws-sdk-go/aws/credentials"
-	"github.com/aws/aws-sdk-go/aws/signer/v4"
-	"github.com/aws/aws-sdk-go/private/protocol/rest"
+	"github.com/aws/aws-sdk-go/aws/request"
 )
 
 func init() {
@@ -48,7 +48,6 @@ func main() {
 	if _, err := creds.Get(); err != nil {
 		log.Fatalf("Failed to load credentials: %v", err)
 	}
-	signer := v4.NewSigner(creds)
 
 	director := func(req *http.Request) {
 		req.URL.Scheme = "https"
@@ -56,14 +55,6 @@ func main() {
 		req.URL.Host = *esDomain
 		req.Header.Set("Connection", "close")
 
-		if strings.Contains(req.URL.RawPath, "%2C") {
-			req.URL.RawPath = rest.EscapePath(req.URL.RawPath, false)
-		}
-
-		log.WithFields(log.Fields{
-			"method": req.Method,
-			"path":   req.URL.Path,
-		}).Debug()
 		t := time.Now()
 		req.Header.Set("Date", t.Format(time.RFC3339))
 
@@ -75,13 +66,31 @@ func main() {
 			}).Errorf("Failed to consume body %v", err)
 			return
 		}
-		buf := bytes.NewReader(bodyData)
+		req.Body = ioutil.NopCloser(bytes.NewBuffer(bodyData))
 
-		if _, err := signer.Sign(req, buf, "es", *region, t); err != nil {
-			log.WithFields(log.Fields{
-				"method": req.Method,
-				"path":   req.URL.Path,
-			}).Errorf("Failed to sign request %v", err)
+		config := aws.NewConfig().WithCredentials(creds)
+		config = config.WithRegion(*region)
+		clientInfo := metadata.ClientInfo{
+			ServiceName: "es",
+		}
+		operation := &request.Operation{
+			Name:       "",
+			HTTPMethod: req.Method,
+			HTTPPath:   req.URL.Path,
+		}
+		handlers := request.Handlers{}
+		awsReq := request.New(*config, clientInfo, handlers, nil, operation, nil, nil)
+		awsReq.SetBufferBody(bodyData)
+		awsReq.HTTPRequest.URL = req.URL
+		awsReq.Sign()
+
+		for k, v := range awsReq.HTTPRequest.Header {
+			req.Header[k] = v
+		}
+
+		log.Debug(req.URL)
+		for k, header := range req.Header {
+			log.Debugf("    %v: %v", k, header)
 		}
 	}
 	proxy := &httputil.ReverseProxy{Director: director}
