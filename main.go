@@ -32,7 +32,7 @@ func init() {
 	}
 }
 
-var esDomain = flag.String("target", os.Getenv("ES_DOMAIN"), "The target url to proxy to.")
+var esDomain = flag.String("domain", os.Getenv("ES_DOMAIN"), "The elasticsearch domain to proxy")
 var listenPort = flag.Int("port", 8080, "Listening port for proxy")
 var region = flag.String("region", os.Getenv("AWS_REGION"), "AWS region for credentials")
 
