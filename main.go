@@ -40,8 +40,8 @@ func main() {
 	flag.Parse()
 
 	log.Printf("Connected to %s", *esDomain)
-	log.Print("AWS ES cluster available at http://127.0.0.1:9200")
-	log.Print("Kibana available at http://127.0.0.1:9200/_plugin/kibana/")
+	log.Printf("AWS ES cluster available at http://127.0.0.1:%d", *listenPort)
+	log.Printf("Kibana available at http://127.0.0.1:%d/_plugin/kibana/", *listenPort)
 	creds := credentials.NewEnvCredentials()
 
 	if _, err := creds.Get(); err != nil {
