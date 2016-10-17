@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"flag"
+	"fmt"
 	"io/ioutil"
 	"net/http"
 	"net/http/httputil"
@@ -84,5 +85,5 @@ func main() {
 		}
 	}
 	proxy := &httputil.ReverseProxy{Director: director}
-	log.Fatal(http.ListenAndServe(":9200", proxy))
+	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", *listenPort), proxy))
 }
