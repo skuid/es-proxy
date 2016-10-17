@@ -5,7 +5,9 @@
 # To run:
 # $ docker run micahhausler/es-proxy
 
-FROM busybox
+FROM alpine
+
+RUN apk -U add ca-certificates
 
 MAINTAINER Micah Hausler, <hausler.m@gmail.com>
 
