@@ -15,17 +15,14 @@ export AWS_REGION=<region>
 
 ```
 Usage of ./es-proxy:
-  -domain string
-        The elasticsearch domain to proxy (default "os.Getenv(\"ES_DOMAIN\")")
-  -port int
-        Listening port for proxy (default 8080)
-  -region string
-        AWS region for credentials (default "os.Getenv(\"AWS_REGION\")")
+      --domain string   The elasticsearch domain to proxy
+      --port int        Listening port for proxy (default 8080)
+      --region string   AWS region for credentials (default "us-west-2")
 ```
 
 ## Contributing
 
-All code in the `/vendor` director is managed by [`govendor`](https://github.com/kardianos/govendor)
+All code in the `/vendor` director is managed by [`dep`](https://github.com/golang/dep)
 
 ## Wishlist
 
