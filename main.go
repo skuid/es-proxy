@@ -13,7 +13,12 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/aws/signer/v4"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	auth "github.com/skuid/go-middlewares/authn/google"
 	"github.com/skuid/spec"
+	"github.com/skuid/spec/lifecycle"
+	_ "github.com/skuid/spec/metrics"
+	"github.com/skuid/spec/middlewares"
 	flag "github.com/spf13/pflag"
 	"github.com/spf13/viper"
 	"go.uber.org/zap"
@@ -36,6 +41,9 @@ func main() {
 	flag.String("domain", "", "The elasticsearch domain to proxy")
 	flag.Int("port", 3000, "Listening port for proxy")
 	flag.String("region", "us-west-2", "AWS region for credentials")
+	flag.Bool("auth-enable", false, "enable Google OIDC authentication")
+	flag.String("auth-email-domain", "", "allowed user domains")
+	flag.Int("metrics-port", 3001, "management endpoint port")
 	flag.Parse()
 
 	viper.BindPFlags(flag.CommandLine)
@@ -86,7 +94,36 @@ func main() {
 		}
 	}
 	proxy := &httputil.ReverseProxy{Director: director}
-	if err := http.ListenAndServe(fmt.Sprintf(":%d", viper.GetInt("port")), proxy); err != http.ErrServerClosed {
+	mux := http.NewServeMux()
+
+	var mwares []middlewares.Middleware
+
+	if viper.GetBool("auth-enable") {
+		authorizer := auth.New(
+			auth.WithAuthorizedDomains(viper.GetString("auth-email-domain")),
+		)
+		mwares = append(mwares, authorizer.Authorize())
+	}
+
+	mux.Handle("/", middlewares.Apply(
+		proxy,
+		mwares...,
+	))
+
+	hostPort := fmt.Sprintf(":%d", viper.GetInt("port"))
+	server := &http.Server{Addr: hostPort, Handler: mux}
+	lifecycle.ShutdownOnTerm(server)
+
+	go func() {
+		internalMux := http.NewServeMux()
+		internalMux.Handle("/metrics", promhttp.Handler())
+		internalMux.HandleFunc("/live", lifecycle.LivenessHandler)
+		internalMux.HandleFunc("/ready", lifecycle.ReadinessHandler)
+		zap.L().Info("starting es-proxy metrics server", zap.Int("port", viper.GetInt("metrics-port")))
+		http.ListenAndServe(fmt.Sprintf(":%d", viper.GetInt("metrics-port")), internalMux)
+	}()
+
+	if err := server.ListenAndServe(); err != http.ErrServerClosed {
 		zap.L().Fatal(err.Error())
 	}
 }
