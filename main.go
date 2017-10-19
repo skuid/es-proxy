@@ -2,97 +2,91 @@ package main
 
 import (
 	"bytes"
-	"flag"
 	"fmt"
 	"io/ioutil"
 	"net/http"
 	"net/http/httputil"
 	"os"
+	"strings"
 	"time"
 
-	log "github.com/Sirupsen/logrus"
 	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/client/metadata"
-	"github.com/aws/aws-sdk-go/aws/credentials"
-	"github.com/aws/aws-sdk-go/aws/request"
+	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/aws/signer/v4"
+	"github.com/skuid/spec"
+	flag "github.com/spf13/pflag"
+	"github.com/spf13/viper"
+	"go.uber.org/zap"
 )
 
 func init() {
-	log.SetFormatter(&log.JSONFormatter{})
-	log.SetOutput(os.Stderr)
-
-	level := os.Getenv("LOG_LEVEL")
-	if len(level) == 0 {
-		level = "info"
+	l, err := spec.NewStandardLogger()
+	if err != nil {
+		fmt.Println(err.Error())
+		os.Exit(1)
 	}
-	if lvl, err := log.ParseLevel(level); err != nil {
-		log.Errorf("Level '%s' is invalid: falling back to INFO", level)
-		log.SetLevel(log.InfoLevel)
-	} else {
-		log.SetLevel(lvl)
+	zap.ReplaceGlobals(l)
+	err = os.Setenv("AWS_SDK_LOAD_CONFIG", "true")
+	if err != nil {
+		zap.L().Fatal(err.Error())
 	}
 }
 
-var esDomain = flag.String("domain", os.Getenv("ES_DOMAIN"), "The elasticsearch domain to proxy")
-var listenPort = flag.Int("port", 8080, "Listening port for proxy")
-var region = flag.String("region", os.Getenv("AWS_REGION"), "AWS region for credentials")
-
 func main() {
+	flag.String("domain", "", "The elasticsearch domain to proxy")
+	flag.Int("port", 3000, "Listening port for proxy")
+	flag.String("region", "us-west-2", "AWS region for credentials")
 	flag.Parse()
 
-	log.Printf("Connected to %s", *esDomain)
-	log.Printf("AWS ES cluster available at http://127.0.0.1:%d", *listenPort)
-	log.Printf("Kibana available at http://127.0.0.1:%d/_plugin/kibana/", *listenPort)
-	creds := credentials.NewEnvCredentials()
+	viper.BindPFlags(flag.CommandLine)
+	viper.SetEnvPrefix("esproxy")
+	viper.AutomaticEnv()
+	viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
 
-	if _, err := creds.Get(); err != nil {
-		log.Fatalf("Failed to load credentials: %v", err)
-	}
+	zap.L().Info("Connected to Elasticsearch",
+		zap.String("domain", viper.GetString("domain")),
+		zap.String("es_host", fmt.Sprintf("http://127.0.0.1:%d", viper.GetInt("port"))),
+		zap.String("kibana_host", fmt.Sprintf("http://127.0.0.1:%d/_plugin/kibana/", viper.GetInt("port"))),
+	)
 
 	director := func(req *http.Request) {
 		req.URL.Scheme = "https"
-		req.Host = *esDomain
-		req.URL.Host = *esDomain
+		req.Host = viper.GetString("domain")
+		req.URL.Host = viper.GetString("domain")
 		req.Header.Set("Connection", "close")
 
 		t := time.Now()
 		req.Header.Set("Date", t.Format(time.RFC3339))
 
-		bodyData, err := ioutil.ReadAll(req.Body)
+		sess, err := session.NewSession(
+			&aws.Config{CredentialsChainVerboseErrors: aws.Bool(true)},
+		)
 		if err != nil {
-			log.WithFields(log.Fields{
-				"method": req.Method,
-				"path":   req.URL.Path,
-			}).Errorf("Failed to consume body %v", err)
+			zap.L().Error("Error creating AWS session", zap.Error(err))
 			return
 		}
-		req.Body = ioutil.NopCloser(bytes.NewBuffer(bodyData))
 
-		config := aws.NewConfig().WithCredentials(creds)
-		config = config.WithRegion(*region)
-		clientInfo := metadata.ClientInfo{
-			ServiceName: "es",
+		creds := sess.Config.Credentials
+		if _, err := creds.Get(); err != nil {
+			zap.L().Error("Failed to load credentials", zap.Error(err))
+			return
 		}
-		operation := &request.Operation{
-			Name:       "",
-			HTTPMethod: req.Method,
-			HTTPPath:   req.URL.Path,
+		signer := v4.NewSigner(creds)
+		var bodyData []byte
+		if req.Body != nil {
+			bodyData, err = ioutil.ReadAll(req.Body)
+			if err != nil {
+				zap.L().Error(err.Error(), zap.String("method", req.Method), zap.String("path", req.URL.Path))
+				return
+			}
 		}
-		handlers := request.Handlers{}
-		awsReq := request.New(*config, clientInfo, handlers, nil, operation, nil, nil)
-		awsReq.SetBufferBody(bodyData)
-		awsReq.HTTPRequest.URL = req.URL
-		awsReq.Sign()
-
-		for k, v := range awsReq.HTTPRequest.Header {
-			req.Header[k] = v
-		}
-
-		log.Debug(req.URL)
-		for k, header := range req.Header {
-			log.Debugf("    %v: %v", k, header)
+		if _, err := signer.Sign(req, bytes.NewReader(bodyData), "es", viper.GetString("region"), t); err != nil {
+			zap.L().Error("Error signing request", zap.Error(err))
+			return
 		}
 	}
 	proxy := &httputil.ReverseProxy{Director: director}
-	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", *listenPort), proxy))
+	if err := http.ListenAndServe(fmt.Sprintf(":%d", viper.GetInt("port")), proxy); err != http.ErrServerClosed {
+		zap.L().Fatal(err.Error())
+	}
 }
