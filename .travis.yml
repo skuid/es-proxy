@@ -1,0 +1,35 @@
+sudo: required
+language: go
+go:
+- 1.9
+- tip
+
+services:
+  - docker
+
+before_install:
+- go get golang.org/x/tools/cmd/cover
+- go get -u github.com/golang/dep/...
+
+install:
+- dep ensure
+- dep status
+
+script:
+- go test -i ./...
+- go test -cover ./...
+- go test -race ./...
+- CGO_ENABLED=0 go build -tags netgo -a -v
+- docker build -t skuid/es-proxy .
+
+after_success:
+   - if [ ! -z "$TRAVIS_TAG" ] && [ "$TRAVIS_GO_VERSION" == "1.9" ]; then
+     docker login -u $DOCKER_USERNAME -p $DOCKER_PASSWORD quay.io;
+     docker tag skuid/es-proxy quay.io/skuid/es-proxy:$TRAVIS_TAG;
+     docker push quay.io/skuid/es-proxy:$TRAVIS_TAG;
+     fi
+   - if [ "$TRAVIS_BRANCH" == "master" ] && [ "$TRAVIS_GO_VERSION" == "1.9" ]; then
+     docker login -u $DOCKER_USERNAME -p $DOCKER_PASSWORD quay.io;
+     docker tag skuid/es-proxy quay.io/skuid/es-proxy:master;
+     docker push quay.io/skuid/es-proxy:master;
+     fi
