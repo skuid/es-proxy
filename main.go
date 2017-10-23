@@ -63,6 +63,10 @@ func main() {
 		req.URL.Host = viper.GetString("domain")
 		req.Header.Set("Connection", "close")
 
+		// delete x-forwarded-for since the request
+		// signing doesn't like it
+		req.Header.Del("X-Forwarded-For")
+
 		t := time.Now()
 		req.Header.Set("Date", t.Format(time.RFC3339))
 
