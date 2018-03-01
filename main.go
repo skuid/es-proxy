@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/credentials"
+	"github.com/aws/aws-sdk-go/aws/credentials/stscreds"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/aws/signer/v4"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -38,6 +40,9 @@ func init() {
 }
 
 func main() {
+	flag.String("role-arn", "", "The AWS Role ARN to use")
+	flag.String("mfa-serial", "", "The serial number of the MFA device.")
+
 	flag.String("domain", "", "The elasticsearch domain to proxy")
 	flag.Int("port", 3000, "Listening port for proxy")
 	flag.String("region", "us-west-2", "AWS region for credentials")
@@ -57,6 +62,26 @@ func main() {
 		zap.String("kibana_host", fmt.Sprintf("http://127.0.0.1:%d/_plugin/kibana/", viper.GetInt("port"))),
 	)
 
+	sess, err := session.NewSession(&aws.Config{CredentialsChainVerboseErrors: aws.Bool(true)})
+	if err != nil {
+		zap.L().Error("Error creating AWS session", zap.Error(err))
+		return
+	}
+
+	var creds *credentials.Credentials
+	if len(viper.GetString("role-arn")) > 0 && len(viper.GetString("mfa-serial")) > 0 {
+		creds = stscreds.NewCredentials(sess, viper.GetString("role-arn"), func(p *stscreds.AssumeRoleProvider) {
+			p.SerialNumber = aws.String(viper.GetString("mfa-serial"))
+			p.TokenProvider = stscreds.StdinTokenProvider
+		})
+	} else {
+		creds = sess.Config.Credentials
+		if _, err := creds.Get(); err != nil {
+			zap.L().Error("Failed to load credentials", zap.Error(err))
+			return
+		}
+	}
+
 	director := func(req *http.Request) {
 		req.URL.Scheme = "https"
 		req.Host = viper.GetString("domain")
@@ -70,19 +95,6 @@ func main() {
 		t := time.Now()
 		req.Header.Set("Date", t.Format(time.RFC3339))
 
-		sess, err := session.NewSession(
-			&aws.Config{CredentialsChainVerboseErrors: aws.Bool(true)},
-		)
-		if err != nil {
-			zap.L().Error("Error creating AWS session", zap.Error(err))
-			return
-		}
-
-		creds := sess.Config.Credentials
-		if _, err := creds.Get(); err != nil {
-			zap.L().Error("Failed to load credentials", zap.Error(err))
-			return
-		}
 		signer := v4.NewSigner(creds)
 		var bodyData []byte
 		if req.Body != nil {
